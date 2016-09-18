@@ -1,6 +1,7 @@
 import numpy as np
 from collections import defaultdict
 import h5py
+from tqdm import tqdm
 
 from NucFrame import NucFrame
 from utils import bp_to_idx
@@ -45,7 +46,7 @@ class NucFrames(object):
     nuc_frm_path = self.nuc_frm_path_list[key]
     return(NucFrame(nuc_frm_path, self.chrm_limit_dict))
 
-  def load_nuc_tracks(self, nuc_file, nuc_track_name, track_name=None):
+  def load_nuc_tracks(self, nuc_file, nuc_track_name, track_name=None, binary=True):
     if track_name is None:
       track_name = nuc_track_name
 
@@ -54,20 +55,36 @@ class NucFrames(object):
 
     track_dict = {}
 
-    for chrm in set(self.common_chrms) & set(track.keys()):
+    for chrm in tqdm(set(self.common_chrms) & set(track.keys())):
       chrm_bps = self.chrm_bps(chrm)
-      regions = track[chrm]["regions"]
+      regions = track[chrm]["regions"][:].astype(np.int32)
+      values = track[chrm]["values"][:, 0]
 
-      vals = np.zeros_like(chrm_bps)
+      vals = np.zeros(chrm_bps.shape, dtype=np.float64)
+      counts = np.zeros(chrm_bps.shape, dtype=np.float64)
 
       starts = regions[:, 0]
       ends = regions[:, 1]
-      for start, end in zip(starts, ends):
-        track_region_bps = np.arange(start, end, 1000) # TODO: Hard coding here is bad.
+      a = np.argmax(np.abs(ends - starts))
+      for value_idx, (start, end) in enumerate(zip(starts, ends)):
+        if start > end:
+          start, end = end, start
+        track_region_bps = np.arange(start, end, 10000, dtype=np.int32) # TODO: Hard coding here is bad.
         idxs, valid = bp_to_idx(track_region_bps, chrm_bps, bin_size=self.bin_size)
         idxs = np.unique(idxs[valid])
-        vals[idxs] = 1
+        if binary:
+          vals[idxs] = 1
+        else:
+          vals[idxs] += values[value_idx]
+          counts[idxs] += (values[value_idx] != 0)
+      if binary:
+        vals = vals.astype(np.int32)
+      else:
+        counts_mask = counts != 0
+        vals[counts_mask] = vals[counts_mask] / counts[counts_mask]
+
       track_dict[chrm] = vals
+
     self.tracks[track_name] = track_dict
 
   def chrm_bps(self, chrm):
